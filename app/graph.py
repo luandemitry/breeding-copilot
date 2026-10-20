@@ -341,6 +341,8 @@ class AgentResult:
     final: FinalAnswer
     metrics: RunMetrics
     records: list[ToolRecord]
+    verify_attempts: int = 0  # how many drafts the verifier rejected
+    verified: bool = False  # True when the final draft passed verification
 
 
 def run_agent(
@@ -354,4 +356,10 @@ def run_agent(
     graph = build_graph(ToolContext(llm=llm, db_path=db_path, artifact_dir=artifact_dir))
     with track_run(llm, question) as run:
         state: Any = graph.invoke({"question": question, "records": [], "notes": []})
-    return AgentResult(final=state["final"], metrics=run.metrics, records=state.get("records", []))
+    return AgentResult(
+        final=state["final"],
+        metrics=run.metrics,
+        records=state.get("records", []),
+        verify_attempts=state.get("verify_attempts", 0),
+        verified=bool(state.get("verified", False)),
+    )
