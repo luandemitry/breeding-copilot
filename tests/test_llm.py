@@ -193,3 +193,45 @@ def test_cache_flag_enables_disk_cache(no_dotenv, monkeypatch, tmp_path):
     client = get_llm(cache=True, requests_per_minute=0)
     client.invoke("q")
     assert list(tmp_path.glob("*.json"))
+
+
+class SlowModel:
+    """Takes 1.5 s of (fake) clock time per call."""
+
+    def __init__(self, clock):
+        self.clock = clock
+
+    def invoke(self, messages):
+        self.clock.now += 1.5
+        return AIMessage(content="slow", usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2})
+
+
+def test_latency_excludes_throttle_and_backoff_waits(tmp_path):
+    clock = Clock()
+    llm = make(SlowModel(clock), clock, requests_per_minute=6, cache_dir=tmp_path)
+    records = []
+    llm.add_listener(records.append)
+    llm.invoke("a")
+    llm.invoke("b")  # throttled: waits before the request
+    assert [r.latency_s for r in records] == [1.5, 1.5]
+    assert records[0].waited_s == 0.0 and records[1].waited_s > 0
+
+
+def test_cache_hit_reports_original_request_latency(tmp_path):
+    clock = Clock()
+    llm = make(SlowModel(clock), clock, requests_per_minute=0, cache_dir=tmp_path)
+    records = []
+    llm.add_listener(records.append)
+    llm.invoke("q")
+    llm.invoke("q")
+    assert [r.cached for r in records] == [False, True]
+    assert records[1].latency_s == records[0].latency_s == 1.5
+
+
+def test_backoff_time_is_reported_as_waited(tmp_path):
+    clock = Clock()
+    llm = make(FlakyModel(failures=2), clock, requests_per_minute=0)
+    records = []
+    llm.add_listener(records.append)
+    llm.invoke("q")
+    assert records[0].retries == 2 and records[0].waited_s == 6.0
