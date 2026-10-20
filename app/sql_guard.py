@@ -94,11 +94,13 @@ def run_query(
 ) -> tuple[str, list[str], list[list], bool]:
     """Validate and execute ``sql`` read-only.
 
-    Returns ``(executed_sql, columns, rows, truncated)``. ``truncated`` is True when the result
-    hit the LIMIT, i.e. there may be more rows.
+    Returns ``(executed_sql, columns, rows, truncated)``. ``truncated`` is True only when the system
+    cap clamped a larger requested LIMIT *and* the cap was reached, i.e. rows were really cut off.
+    Reaching a LIMIT the query asked for itself (e.g. "top 5") is not truncation.
     """
     safe_sql = validate(sql, max_limit)
-    limit = int(sqlglot.parse_one(safe_sql, read="sqlite").args["limit"].expression.name)
+    requested = int(sqlglot.parse_one(sql, read="sqlite").args["limit"].expression.name)
+    clamped = requested > max_limit
     con = open_readonly(db_path)
     deadline = time.monotonic() + QUERY_TIMEOUT_S
     con.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 10_000)
@@ -110,4 +112,4 @@ def run_query(
         raise SQLGuardError(f"query failed: {e}") from e
     finally:
         con.close()
-    return safe_sql, columns, rows, len(rows) >= limit
+    return safe_sql, columns, rows, clamped and len(rows) >= max_limit
