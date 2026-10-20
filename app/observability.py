@@ -25,6 +25,7 @@ logger = logging.getLogger("breeding_copilot.runs")
 
 # USD per 1M tokens: (input, output). Paid list prices, used for the *estimate* only; verify before relying on them.
 DEFAULT_PRICES: dict[str, tuple[float, float]] = {
+    "gemini-3.5-flash-lite": (0.30, 2.50),  # https://ai.google.dev/gemini-api/docs/pricing (free tier: $0)
     "gemini-2.5-flash": (0.30, 2.50),
     "gemini-2.5-flash-lite": (0.10, 0.40),
     "llama-3.3-70b-versatile": (0.59, 0.79),

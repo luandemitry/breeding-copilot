@@ -18,6 +18,7 @@ import os
 import random
 import threading
 import time
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -28,8 +29,11 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 
 from app.config import ROOT
 
+# Newer Gemini models ignore `temperature`; the warning would be printed on every request.
+warnings.filterwarnings("ignore", message=".*fixed sampling defaults.*")
+
 DEFAULT_PROVIDER = "google_genai"
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.5-flash-lite"  # free of charge on Google AI Studio (verified against the live API)
 DEFAULT_REQUESTS_PER_MINUTE = 10
 DEFAULT_MAX_RETRIES = 5
 DEFAULT_CACHE_DIR = ROOT / ".cache" / "llm"
@@ -41,7 +45,7 @@ class LLMConfigError(RuntimeError):
 
 
 class RateLimitExhausted(RuntimeError):
-    """The provider kept answering 429 after all retries."""
+    """The provider kept answering 429/503 after all retries."""
 
 
 @dataclass
@@ -58,13 +62,32 @@ class LLMCallRecord:
     waited_s: float = 0.0  # time spent in self-imposed throttle/backoff sleeps (not part of latency_s)
 
 
-def is_rate_limit_error(exc: BaseException) -> bool:
-    """Best-effort detection of a 429 / quota error across providers."""
+def is_retryable_error(exc: BaseException) -> bool:
+    """Best-effort detection of transient provider errors (429 / quota, 503 / overloaded) across providers."""
     for attr in ("status_code", "code", "http_status"):
-        if getattr(exc, attr, None) == 429:
+        if getattr(exc, attr, None) in (429, 503):
             return True
     text = f"{type(exc).__name__} {exc}".lower()
-    return any(s in text for s in ("429", "resourceexhausted", "ratelimit", "rate limit", "quota"))
+    markers = ("429", "503", "resourceexhausted", "ratelimit", "rate limit", "quota", "unavailable", "high demand", "overloaded")
+    return any(m in text for m in markers)
+
+
+is_rate_limit_error = is_retryable_error  # backwards-compatible name
+
+
+def content_to_text(content: Any) -> str:
+    """Flatten chat content to plain text. Some providers (e.g. Gemini 3.x) return a list of typed parts."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict) and part.get("type", "text") == "text":
+                parts.append(str(part.get("text", "")))
+        return "".join(parts)
+    return str(content)
 
 
 def _as_messages(messages: Any) -> list[BaseMessage]:
@@ -163,15 +186,16 @@ class ThrottledLLM(BaseLLMClient):
                 latency = self._clock() - started
                 break
             except Exception as exc:  # noqa: BLE001 - provider exceptions vary
-                if not is_rate_limit_error(exc):
+                if not is_retryable_error(exc):
                     raise
                 if retries >= self._max_retries:
-                    raise RateLimitExhausted(f"still rate limited after {retries} retries: {exc}") from exc
+                    raise RateLimitExhausted(f"provider still rate limiting or unavailable after {retries} retries: {exc}") from exc
                 delay = min(BACKOFF_MAX_S, BACKOFF_BASE_S * 2**retries) + self._jitter()
                 self._sleep(delay)
                 waited += delay
                 retries += 1
-        message = response if isinstance(response, AIMessage) else AIMessage(content=str(response))
+        raw = response if isinstance(response, AIMessage) else AIMessage(content=str(response))
+        message = AIMessage(content=content_to_text(raw.content), usage_metadata=raw.usage_metadata)
         self._write_cache(msgs, message, latency)
         self._emit(message, latency, retries=retries, waited_s=waited)
         return message
@@ -199,7 +223,7 @@ class ThrottledLLM(BaseLLMClient):
         if path is None or not path.exists():
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
-        message = AIMessage(content=data["content"], usage_metadata=data.get("usage_metadata"))
+        message = AIMessage(content=content_to_text(data["content"]), usage_metadata=data.get("usage_metadata"))
         return message, float(data.get("latency_s", 0.0))
 
     def _write_cache(self, messages: list[BaseMessage], message: AIMessage, latency_s: float) -> None:
