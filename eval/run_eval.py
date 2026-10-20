@@ -183,7 +183,7 @@ def render_report(results: list[CaseResult], agg: dict[str, Any], llm: BaseLLMCl
         "**The real cost was zero**: every call used a free-tier model. The estimate applies configurable paid list "
         "prices to the real token counts and is only indicative. LLM latency is the provider request time "
         "(excluding self-imposed throttling; for cached replays it is the latency of the original request). "
-        f"p95 is computed from only {n} runs, so treat it as approximate.",
+        f"p95 is computed from only {agg['n_llm_runs']} runs, so treat it as approximate.",
         "",
         "## Cases",
         "",
