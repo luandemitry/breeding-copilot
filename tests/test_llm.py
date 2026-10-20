@@ -133,6 +133,7 @@ def test_is_rate_limit_error():
     assert is_rate_limit_error(RateLimitError("x"))
     assert is_rate_limit_error(RuntimeError("429 Too Many Requests"))
     assert is_rate_limit_error(RuntimeError("ResourceExhausted: quota exceeded"))
+    assert is_rate_limit_error(RuntimeError("503 UNAVAILABLE. This model is currently experiencing high demand"))
     assert not is_rate_limit_error(ValueError("bad json"))
 
 
@@ -235,3 +236,24 @@ def test_backoff_time_is_reported_as_waited(tmp_path):
     llm.add_listener(records.append)
     llm.invoke("q")
     assert records[0].retries == 2 and records[0].waited_s == 6.0
+
+
+def test_list_of_content_parts_is_flattened_to_text(tmp_path):
+    class PartsModel:
+        def invoke(self, messages):
+            return AIMessage(
+                content=[{"type": "text", "text": '{"a": '}, {"type": "text", "text": "1}", "extras": {"signature": "x"}}],
+                usage_metadata={"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            )
+
+    clock = Clock()
+    llm = make(PartsModel(), clock, requests_per_minute=0, cache_dir=tmp_path)
+    assert llm.invoke("q").content == '{"a": 1}'
+    assert llm.invoke("q").content == '{"a": 1}'  # same after a cache round trip
+
+
+def test_content_to_text():
+    from app.llm import content_to_text
+
+    assert content_to_text("plain") == "plain"
+    assert content_to_text(["a", {"type": "text", "text": "b"}, {"type": "image", "url": "x"}]) == "ab"

@@ -13,7 +13,7 @@ from typing import Any
 
 ALWAYS_ALLOWED = (80.0,)  # "80% interval" (p10-p90)
 
-_IDENTIFIERS = re.compile(r"\b[A-Za-z]+-\d{2,4}\b|\b[A-Za-z]+\d+\b")  # Cerrado-2027, L042, m12, p90
+_IDENTIFIERS = re.compile(r"\b[A-Za-z][\w-]*\d[\w-]*\b")  # Cerrado-2027, L042, m12, p90, qgbr-2714e999
 _LIST_MARKERS = re.compile(r"(?m)^\s*\d+[.)]\s")  # "1. ", "2) "
 _DECIMAL_COMMA = re.compile(r"(?<=\d),(?=\d{1,2}(?!\d))")
 _NUMBER = re.compile(r"(?<![\w.])-?\d+(?:\.\d+)?")
