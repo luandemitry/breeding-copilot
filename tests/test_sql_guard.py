@@ -62,14 +62,23 @@ def test_limit_is_clamped_to_max():
     assert "LIMIT 7" in validate("SELECT line_id FROM lines LIMIT 100", max_limit=7)
 
 
-def test_run_query_returns_rows_columns_and_truncation(synthetic_db):
+def test_run_query_returns_rows_and_columns(synthetic_db):
     sql, cols, rows, truncated = run_query(synthetic_db, "SELECT line_id, family FROM lines ORDER BY line_id LIMIT 3")
     assert cols == ["line_id", "family"]
     assert [r[0] for r in rows] == ["L001", "L002", "L003"]
-    assert truncated is True
-    _, _, rows, truncated = run_query(synthetic_db, "SELECT line_id FROM lines WHERE line_id = 'L042' LIMIT 3")
-    assert rows == [["L042"]] and truncated is False
     assert "LIMIT 3" in sql
+    assert truncated is False  # reaching the query's own LIMIT is not truncation
+
+
+def test_truncated_only_when_the_system_cap_cut_the_result(synthetic_db):
+    _, _, rows, truncated = run_query(synthetic_db, "SELECT line_id FROM lines ORDER BY line_id LIMIT 999999", max_limit=7)
+    assert len(rows) == 7 and truncated is True
+    # A requested limit above the cap is clamped, but a small result is complete.
+    _, _, rows, truncated = run_query(synthetic_db, "SELECT line_id FROM lines WHERE line_id = 'L042' LIMIT 999999", max_limit=7)
+    assert rows == [["L042"]] and truncated is False
+    # LIMIT equal to the cap is the query's own choice, not a clamp.
+    _, _, rows, truncated = run_query(synthetic_db, "SELECT line_id FROM lines LIMIT 7", max_limit=7)
+    assert len(rows) == 7 and truncated is False
 
 
 def test_run_query_wraps_sqlite_errors(synthetic_db):

@@ -55,6 +55,7 @@ def test_historical_question_uses_sql_and_cites_sources(synthetic_db, trained_ar
     assert final.answer == text and final.confidence == "high"
     assert [e.kind for e in final.evidence] == ["sql"] and "LIMIT 5" in final.evidence[0].source
     assert str(top[0][1]) in final.answer
+    assert not any("row limit" in c for c in final.caveats)  # LIMIT 5 chosen by the query is not truncation
 
 
 def test_prediction_question_reports_interval_and_model_version(synthetic_db, trained_artifacts):
