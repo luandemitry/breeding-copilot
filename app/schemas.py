@@ -47,6 +47,13 @@ class Prediction(BaseModel):
         return p90
 
 
+class Candidate(BaseModel):
+    """A line with the trait values the selection index is computed from."""
+
+    line_id: str
+    traits: dict[str, float] = Field(description="e.g. {'yield_t_ha': 6.1, 'disease_score': 3.2}")
+
+
 class RankedLine(BaseModel):
     """A line with its selection-index score and per-trait contributions."""
 
