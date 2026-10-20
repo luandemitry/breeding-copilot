@@ -59,3 +59,8 @@ def test_redact_replaces_only_listed_numbers():
 
 def test_redact_does_not_break_longer_numbers():
     assert redact("values 12.5 and 12", ["12"]) == "values 12.5 and [unverified]"
+
+
+def test_model_version_strings_are_identifiers_not_numbers():
+    text = "Predicted 5.03 t/ha with model version qgbr-2714e999 for L042 in Cerrado-2027."
+    assert extract_numbers(text) == ["5.03"]
