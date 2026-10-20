@@ -52,9 +52,10 @@ class LLMCallRecord:
     model: str
     input_tokens: int
     output_tokens: int
-    latency_s: float
+    latency_s: float  # duration of the provider request; for cache hits, of the original request
     cached: bool = False
     retries: int = 0
+    waited_s: float = 0.0  # time spent in self-imposed throttle/backoff sleeps (not part of latency_s)
 
 
 def is_rate_limit_error(exc: BaseException) -> bool:
@@ -92,7 +93,15 @@ class BaseLLMClient:
     def remove_listener(self, listener: Callable[[LLMCallRecord], None]) -> None:
         self._listeners.remove(listener)
 
-    def _emit(self, message: AIMessage, latency_s: float, *, cached: bool = False, retries: int = 0) -> None:
+    def _emit(
+        self,
+        message: AIMessage,
+        latency_s: float,
+        *,
+        cached: bool = False,
+        retries: int = 0,
+        waited_s: float = 0.0,
+    ) -> None:
         usage = message.usage_metadata or {}
         record = LLMCallRecord(
             provider=self.provider,
@@ -102,6 +111,7 @@ class BaseLLMClient:
             latency_s=latency_s,
             cached=cached,
             retries=retries,
+            waited_s=waited_s,
         )
         for listener in list(self._listeners):
             listener(record)
@@ -138,58 +148,66 @@ class ThrottledLLM(BaseLLMClient):
 
     def invoke(self, messages: Any) -> AIMessage:
         msgs = _as_messages(messages)
-        start = self._clock()
         cached = self._read_cache(msgs)
         if cached is not None:
-            self._emit(cached, self._clock() - start, cached=True)
-            return cached
+            message, original_latency = cached
+            self._emit(message, original_latency, cached=True)
+            return message
 
-        retries = 0
+        retries, waited = 0, 0.0
         while True:
-            self._throttle()
+            waited += self._throttle()
+            started = self._clock()
             try:
                 response = self._model.invoke(msgs)
+                latency = self._clock() - started
                 break
             except Exception as exc:  # noqa: BLE001 - provider exceptions vary
                 if not is_rate_limit_error(exc):
                     raise
                 if retries >= self._max_retries:
                     raise RateLimitExhausted(f"still rate limited after {retries} retries: {exc}") from exc
-                self._sleep(min(BACKOFF_MAX_S, BACKOFF_BASE_S * 2**retries) + self._jitter())
+                delay = min(BACKOFF_MAX_S, BACKOFF_BASE_S * 2**retries) + self._jitter()
+                self._sleep(delay)
+                waited += delay
                 retries += 1
         message = response if isinstance(response, AIMessage) else AIMessage(content=str(response))
-        self._write_cache(msgs, message)
-        self._emit(message, self._clock() - start, retries=retries)
+        self._write_cache(msgs, message, latency)
+        self._emit(message, latency, retries=retries, waited_s=waited)
         return message
 
-    def _throttle(self) -> None:
+    def _throttle(self) -> float:
+        """Sleep if needed to respect the requests-per-minute limit; return the seconds waited."""
         with self._lock:
             now = self._clock()
+            waited = 0.0
             if self._last_request is not None:
-                wait = self._min_interval - (now - self._last_request)
-                if wait > 0:
-                    self._sleep(wait)
+                waited = max(0.0, self._min_interval - (now - self._last_request))
+                if waited > 0:
+                    self._sleep(waited)
                     now = self._clock()
             self._last_request = now
+            return waited
 
     def _cache_path(self, messages: list[BaseMessage]) -> Path | None:
         if self._cache_dir is None:
             return None
         return self._cache_dir / f"{_cache_key(self.provider, self.model, messages)}.json"
 
-    def _read_cache(self, messages: list[BaseMessage]) -> AIMessage | None:
+    def _read_cache(self, messages: list[BaseMessage]) -> tuple[AIMessage, float] | None:
         path = self._cache_path(messages)
         if path is None or not path.exists():
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
-        return AIMessage(content=data["content"], usage_metadata=data.get("usage_metadata"))
+        message = AIMessage(content=data["content"], usage_metadata=data.get("usage_metadata"))
+        return message, float(data.get("latency_s", 0.0))
 
-    def _write_cache(self, messages: list[BaseMessage], message: AIMessage) -> None:
+    def _write_cache(self, messages: list[BaseMessage], message: AIMessage, latency_s: float) -> None:
         path = self._cache_path(messages)
         if path is None:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"content": message.content, "usage_metadata": message.usage_metadata}
+        payload = {"content": message.content, "usage_metadata": message.usage_metadata, "latency_s": latency_s}
         path.write_text(json.dumps(payload), encoding="utf-8")
 
 
