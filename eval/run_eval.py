@@ -81,7 +81,11 @@ def aggregate(results: list[CaseResult]) -> dict[str, Any]:
         ok, n = rate(results, check, category)
         return ok / n if n else None
 
-    runs = [r.metrics for r in results if r.metrics]
+    all_runs = [r.metrics for r in results if r.metrics]
+    runs = [m for m in all_runs if m.llm_calls > 0]  # questions that reached the LLM
+    fresh = [m for m in runs if m.cached_calls == 0]  # wall time is only meaningful without cache replays
+    run_stats = summarize(runs)
+    run_stats["wall_time_s"] = summarize(fresh)["wall_time_s"]
     precisions = [r.info["precision"] for r in results if r.info.get("precision") is not None]
     return {
         "tool_choice": frac("tool"),
@@ -98,7 +102,10 @@ def aggregate(results: list[CaseResult]) -> dict[str, Any]:
         "redacted": sum(1 for r in results if r.result and not r.result.verified and r.result.verify_attempts > 0),
         "errors": sum(1 for r in results if r.error),
         "n_cases": len(results),
-        "runs": summarize(runs),
+        "runs": run_stats,
+        "n_llm_runs": len(runs),
+        "n_fresh_runs": len(fresh),
+        "n_refused_before_llm": len(all_runs) - len(runs),
         "totals": {
             "input_tokens": sum(m.input_tokens for m in runs),
             "output_tokens": sum(m.output_tokens for m in runs),
@@ -157,6 +164,10 @@ def render_report(results: list[CaseResult], agg: dict[str, Any], llm: BaseLLMCl
         f"cases ending with redacted numbers: {agg['redacted']}; crashed cases: {agg['errors']}.",
         "",
         "## Cost and latency",
+        "",
+        f"Computed over the {agg['n_llm_runs']} questions that reached the LLM "
+        f"({agg['n_refused_before_llm']} were refused before any LLM call, at zero cost); wall time uses only the "
+        f"{agg['n_fresh_runs']} of them answered without any cache replay.",
         "",
         "| | Mean | p95 |",
         "|---|---|---|",
