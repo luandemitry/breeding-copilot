@@ -5,7 +5,7 @@ setup:
 	uv sync
 
 data:
-	@echo make data: not implemented yet, see issue 3
+	uv run python -m data.generate
 
 train:
 	@echo make train: not implemented yet, see issue 4
