@@ -14,7 +14,7 @@ test:
 	uv run pytest
 
 eval:
-	@echo make eval: not implemented yet, see issue 12
+	uv run python -m eval.run_eval
 
 run:
 	@echo make run: not implemented yet, see issue 13
