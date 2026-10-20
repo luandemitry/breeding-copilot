@@ -8,7 +8,7 @@ data:
 	uv run python -m data.generate
 
 train:
-	@echo make train: not implemented yet, see issue 4
+	uv run python -m models.train
 
 test:
 	uv run pytest
