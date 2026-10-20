@@ -15,3 +15,15 @@ jobs:
         run: make setup
       - name: Run unit tests
         run: make test
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image (generates the data and trains the model)
+        run: docker build -t breeding-copilot .
+      - name: Smoke-test the container
+        run: |
+          docker run -d --name bc -p 8000:8000 breeding-copilot
+          for i in $(seq 1 30); do curl -sf localhost:8000/health && break || sleep 1; done
+          curl -sf localhost:8000/health | grep '"status":"ok"'

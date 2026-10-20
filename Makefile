@@ -17,4 +17,4 @@ eval:
 	uv run python -m eval.run_eval
 
 run:
-	@echo make run: not implemented yet, see issue 13
+	uv run uvicorn app.api:app --host 0.0.0.0 --port 8000
